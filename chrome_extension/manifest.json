@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Peak Time Tracker",
+  "version": "1.0.0",
+  "description": "Sends tab focus events to the Peak time tracking agent.",
+  "permissions": ["tabs", "activeTab", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

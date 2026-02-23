@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { width: 300px; padding: 12px; font-family: system-ui, sans-serif; font-size: 13px; }
+    h3 { margin: 0 0 8px; }
+    textarea { width: 100%; height: 80px; font-size: 12px; font-family: monospace; }
+    button { margin-top: 8px; padding: 4px 12px; cursor: pointer; }
+    .status { color: #666; margin-top: 8px; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <h3>Peak Tracker</h3>
+  <p>URL blocklist (one per line):</p>
+  <textarea id="blocklist" placeholder="example.com&#10;private-site.org"></textarea>
+  <button id="save">Save</button>
+  <div class="status" id="status"></div>
+
+  <script>
+    const blocklist = document.getElementById("blocklist");
+    const saveBtn = document.getElementById("save");
+    const status = document.getElementById("status");
+
+    chrome.storage.local.get("urlBlocklist", (result) => {
+      if (result.urlBlocklist) {
+        blocklist.value = result.urlBlocklist.join("\n");
+      }
+    });
+
+    saveBtn.addEventListener("click", () => {
+      const patterns = blocklist.value
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      chrome.storage.local.set({ urlBlocklist: patterns }, () => {
+        status.textContent = "Saved.";
+        setTimeout(() => { status.textContent = ""; }, 2000);
+      });
+    });
+  </script>
+</body>
+</html>
