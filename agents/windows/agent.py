@@ -8,6 +8,7 @@ Usage:
     python -m agents.windows_agent
 """
 
+import atexit
 import ctypes
 import ctypes.wintypes
 import json
@@ -125,7 +126,11 @@ class WindowsAgent:
         self.jsonl_offsets: dict[str, int] = {}
 
     def start(self):
+        # Close any orphaned spans from a previous crash/forced kill
+        self._close_orphaned_spans()
+
         print(f"[peak] Windows agent started")
+        atexit.register(self._cleanup)
 
         # Start idle polling thread
         idle_thread = threading.Thread(target=self._idle_poll_loop, daemon=True)
@@ -181,11 +186,33 @@ class WindowsAgent:
 
     def stop(self):
         self._stop.set()
+        self._cleanup()
+
+    def _cleanup(self):
+        """Close open spans and DB connection. Safe to call multiple times."""
         with self.lock:
             if self.current_span_id:
-                db.close_span(self.db_conn, self.current_span_id)
-        self.db_conn.close()
+                try:
+                    db.close_span(self.db_conn, self.current_span_id)
+                except Exception:
+                    pass
+                self.current_span_id = None
+        try:
+            self.db_conn.close()
+        except Exception:
+            pass
         print("[peak] Windows agent stopped.")
+
+    def _close_orphaned_spans(self):
+        """Close any spans left open from a previous crash."""
+        rows = self.db_conn.execute(
+            "SELECT id FROM window_spans WHERE machine = ? AND end_time IS NULL",
+            (self.machine_id,),
+        ).fetchall()
+        for row in rows:
+            db.close_span(self.db_conn, row["id"])
+        if rows:
+            print(f"[peak] Closed {len(rows)} orphaned span(s) from previous run")
 
     def _on_foreground_change(self):
         app_name, window_title = get_foreground_window_info()

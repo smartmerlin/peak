@@ -1,11 +1,10 @@
 """
 Screenshot capture module.
 
-Captures the active window every 30s, resizes to 720p, saves as JPEG.
+Captures the screen every 30s, resizes to 720p, saves as JPEG.
 Pixel-diff detects screen changes. Stores metadata as enrichments.
 
-Usage:
-    python -m agents.screenshot [--standalone]
+Uses mss on Windows, screencapture on macOS.
 """
 
 import hashlib
@@ -25,8 +24,47 @@ from PIL import Image
 from agents.config import load_config, SCREENSHOTS_DIR
 from agents import db
 
+SYSTEM = platform.system()
 
-def _get_frontmost_window_id() -> int | None:
+
+def _capture_screen_mss() -> Image.Image | None:
+    """Capture the primary monitor using mss (cross-platform, used on Windows)."""
+    try:
+        import mss
+        with mss.mss() as sct:
+            monitor = sct.monitors[1]  # Primary monitor
+            shot = sct.grab(monitor)
+            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+            return img
+    except Exception:
+        return None
+
+
+def _capture_screen_macos() -> Image.Image | None:
+    """Capture the frontmost window on macOS using screencapture."""
+    wid = _get_frontmost_window_id_macos()
+    if wid is None:
+        return None
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        result = subprocess.run(
+            ["screencapture", "-x", "-o", "-l", str(wid), tmp_path],
+            capture_output=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        img = Image.open(tmp_path).convert("RGB")
+        return img
+    except Exception:
+        return None
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def _get_frontmost_window_id_macos() -> int | None:
     """Get the CGWindowID of the frontmost window using Quartz."""
     try:
         from Quartz import (
@@ -40,7 +78,6 @@ def _get_frontmost_window_id() -> int | None:
             kCGNullWindowID,
         )
         for win in windows:
-            # Layer 0 = normal windows; skip menubar, dock, etc.
             if win.get("kCGWindowLayer", 999) == 0 and win.get("kCGWindowOwnerName"):
                 return win.get("kCGWindowNumber")
     except Exception:
@@ -48,29 +85,14 @@ def _get_frontmost_window_id() -> int | None:
     return None
 
 
-def _capture_active_window() -> Image.Image | None:
-    """Capture the active window on macOS using screencapture."""
-    wid = _get_frontmost_window_id()
-    if wid is None:
-        return None
-
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp_path = tmp.name
-
-    try:
-        # -x = no sound, -l = window ID, -o = no shadow
-        result = subprocess.run(
-            ["screencapture", "-x", "-o", "-l", str(wid), tmp_path],
-            capture_output=True, timeout=5,
-        )
-        if result.returncode != 0:
-            return None
-        img = Image.open(tmp_path).convert("RGB")
-        return img
-    except Exception:
-        return None
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+def capture_screen() -> Image.Image | None:
+    """Capture screen using the appropriate method for the current platform."""
+    if SYSTEM == "Windows":
+        return _capture_screen_mss()
+    elif SYSTEM == "Darwin":
+        return _capture_screen_macos()
+    else:
+        return _capture_screen_mss()  # Fallback to mss
 
 
 class ScreenshotCapture:
@@ -103,7 +125,7 @@ class ScreenshotCapture:
         print("[peak] Screenshot capture stopped.")
 
     def _capture(self):
-        img = _capture_active_window()
+        img = capture_screen()
         if img is None:
             return
 

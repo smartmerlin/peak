@@ -6,6 +6,7 @@ Usage:
     python -m agents.run --standalone   # Mac: write directly to SQLite
 """
 
+import atexit
 import platform
 import signal
 import sys
@@ -51,6 +52,8 @@ def main():
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
+    atexit.register(agent.stop)
+    atexit.register(screenshotter.stop)
 
     # Start agent (blocks)
     agent.start()

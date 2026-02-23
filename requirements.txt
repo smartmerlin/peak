@@ -1,14 +1,15 @@
 # Core
+psutil>=5.9.0
 mss>=9.0.0
 Pillow>=10.0.0
 numpy>=1.24.0
 
-# Mac agent
-pyobjc-framework-Cocoa>=10.0
-pyobjc-framework-Quartz>=10.0
-
 # Web server (Chrome events + future UI)
 flask>=3.0.0
+
+# Mac agent (only installed on macOS)
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
 
 # LLM (Phase 2)
 anthropic>=0.40.0
