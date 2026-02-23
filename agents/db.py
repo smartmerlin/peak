@@ -192,3 +192,230 @@ def add_project(conn: sqlite3.Connection, name: str, description: str = "") -> i
     )
     conn.commit()
     return cursor.lastrowid
+
+
+def get_active_projects(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, name, description FROM projects WHERE active = 1"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def seed_projects(conn: sqlite3.Connection, projects: list[dict]) -> None:
+    """Upsert projects from config. Adds new ones, updates descriptions."""
+    for p in projects:
+        existing = conn.execute(
+            "SELECT id FROM projects WHERE name = ?", (p["name"],)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE projects SET description = ? WHERE name = ?",
+                (p.get("description", ""), p["name"]),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO projects (name, description) VALUES (?, ?)",
+                (p["name"], p.get("description", "")),
+            )
+    conn.commit()
+
+
+# --- Span query helpers ---
+
+def get_spans_in_range(conn: sqlite3.Connection, start: str, end: str) -> list[dict]:
+    """Get all spans overlapping with [start, end)."""
+    rows = conn.execute(
+        """SELECT * FROM window_spans
+           WHERE start_time < ? AND (end_time > ? OR end_time IS NULL)
+           ORDER BY start_time""",
+        (end, start),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_enrichments_in_range(
+    conn: sqlite3.Connection, start: str, end: str, source: str | None = None
+) -> list[dict]:
+    """Get enrichments in [start, end), optionally filtered by source."""
+    if source:
+        rows = conn.execute(
+            """SELECT * FROM enrichments
+               WHERE timestamp >= ? AND timestamp < ? AND source = ?
+               ORDER BY timestamp""",
+            (start, end, source),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT * FROM enrichments
+               WHERE timestamp >= ? AND timestamp < ?
+               ORDER BY timestamp""",
+            (start, end),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# --- Classification helpers ---
+
+def block_is_classified(conn: sqlite3.Connection, block_start: str) -> bool:
+    row = conn.execute(
+        "SELECT id FROM classifications WHERE block_start = ?", (block_start,)
+    ).fetchone()
+    return row is not None
+
+
+def insert_classification(
+    conn: sqlite3.Connection,
+    block_start: str,
+    block_end: str,
+    project: str,
+    task: str | None,
+    work_type: str,
+    confidence: str,
+    classification_tier: str,
+    active_minutes: float,
+) -> int:
+    cursor = conn.execute(
+        """INSERT INTO classifications
+           (block_start, block_end, project, task, work_type, confidence,
+            classification_tier, active_minutes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (block_start, block_end, project, task, work_type, confidence,
+         classification_tier, active_minutes),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_recent_classifications(
+    conn: sqlite3.Connection, limit: int = 50
+) -> list[dict]:
+    rows = conn.execute(
+        """SELECT c.*, p.name as project_name
+           FROM classifications c
+           LEFT JOIN projects p ON c.project = p.name
+           ORDER BY c.block_start DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_day_classifications(conn: sqlite3.Connection, date_str: str) -> list[dict]:
+    """Get all classifications for a date (YYYY-MM-DD). Returns in time order."""
+    start = f"{date_str}T00:00:00"
+    end = f"{date_str}T23:59:59"
+    rows = conn.execute(
+        """SELECT * FROM classifications
+           WHERE block_start >= ? AND block_start <= ?
+           ORDER BY block_start""",
+        (start, end),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_classification_by_id(conn: sqlite3.Connection, cls_id: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM classifications WHERE id = ?", (cls_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def update_classification(
+    conn: sqlite3.Connection,
+    cls_id: int,
+    project: str,
+    task: str | None,
+    work_type: str,
+) -> None:
+    """Update a classification after correction."""
+    conn.execute(
+        """UPDATE classifications
+           SET project = ?, task = ?, work_type = ?, verified = 1
+           WHERE id = ?""",
+        (project, task, work_type, cls_id),
+    )
+    conn.commit()
+
+
+def insert_correction(
+    conn: sqlite3.Connection,
+    classification_id: int,
+    original_project: str,
+    corrected_project: str,
+    original_task: str | None,
+    corrected_task: str | None,
+    corrected_work_type: str,
+    signals_snapshot: dict | None = None,
+) -> int:
+    cursor = conn.execute(
+        """INSERT INTO corrections
+           (classification_id, original_project, corrected_project,
+            original_task, corrected_task, corrected_work_type,
+            signals_snapshot, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (classification_id, original_project, corrected_project,
+         original_task, corrected_task, corrected_work_type,
+         json.dumps(signals_snapshot) if signals_snapshot else None,
+         now_iso()),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def bulk_verify(conn: sqlite3.Connection, date_str: str) -> int:
+    """Mark all high-confidence classifications for a date as verified. Returns count."""
+    start = f"{date_str}T00:00:00"
+    end = f"{date_str}T23:59:59"
+    cursor = conn.execute(
+        """UPDATE classifications
+           SET verified = 1
+           WHERE block_start >= ? AND block_start <= ?
+             AND confidence = 'high' AND verified = 0""",
+        (start, end),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
+def get_day_stats(conn: sqlite3.Connection, date_str: str) -> dict:
+    """Compute aggregate stats for a day."""
+    start = f"{date_str}T00:00:00"
+    end = f"{date_str}T23:59:59"
+    rows = conn.execute(
+        """SELECT work_type, COUNT(*) as blocks,
+                  SUM(active_minutes) as total_active
+           FROM classifications
+           WHERE block_start >= ? AND block_start <= ?
+           GROUP BY work_type""",
+        (start, end),
+    ).fetchall()
+
+    stats = {
+        "total_blocks": 0,
+        "total_active_minutes": 0.0,
+        "deep_work_minutes": 0.0,
+        "shallow_work_minutes": 0.0,
+        "meeting_minutes": 0.0,
+        "break_minutes": 0.0,
+        "personal_minutes": 0.0,
+    }
+    for r in rows:
+        active = r["total_active"] or 0
+        stats["total_blocks"] += r["blocks"]
+        stats["total_active_minutes"] += active
+        stats[f"{r['work_type']}_minutes"] = round(active, 1)
+
+    stats["total_active_minutes"] = round(stats["total_active_minutes"], 1)
+
+    # Verified / unverified counts
+    counts = conn.execute(
+        """SELECT
+            SUM(CASE WHEN verified THEN 1 ELSE 0 END) as verified,
+            SUM(CASE WHEN NOT verified THEN 1 ELSE 0 END) as unverified
+           FROM classifications
+           WHERE block_start >= ? AND block_start <= ?""",
+        (start, end),
+    ).fetchone()
+    stats["verified_blocks"] = counts["verified"] or 0
+    stats["unverified_blocks"] = counts["unverified"] or 0
+
+    return stats

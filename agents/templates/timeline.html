@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Peak — Timeline</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; }
+
+/* Header */
+.header { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid #222; }
+.header h1 { font-size: 18px; font-weight: 600; color: #fff; }
+.header-controls { display: flex; align-items: center; gap: 12px; }
+.header input[type="date"] { background: #1a1a1a; border: 1px solid #333; color: #e0e0e0; padding: 6px 10px; border-radius: 6px; font-size: 14px; }
+.btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #e0e0e0; cursor: pointer; font-size: 13px; transition: background 0.15s; }
+.btn:hover { background: #252525; }
+.btn-primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.btn-primary:hover { background: #1d4ed8; }
+
+/* Stats bar */
+.stats-bar { display: flex; gap: 20px; padding: 14px 24px; border-bottom: 1px solid #222; background: #141414; flex-wrap: wrap; }
+.stat { display: flex; flex-direction: column; min-width: 100px; }
+.stat-value { font-size: 20px; font-weight: 700; color: #fff; }
+.stat-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+
+/* Main layout */
+.main { display: flex; height: calc(100vh - 120px); }
+
+/* Timeline */
+.timeline { flex: 1; overflow-y: auto; padding: 16px 24px; }
+.hour-row { display: flex; align-items: stretch; min-height: 36px; margin-bottom: 2px; }
+.hour-label { width: 56px; flex-shrink: 0; font-size: 12px; color: #666; padding-top: 8px; text-align: right; padding-right: 12px; }
+.blocks-row { display: flex; gap: 2px; flex: 1; }
+.block { flex: 1; border-radius: 4px; cursor: pointer; position: relative; min-height: 32px; transition: opacity 0.15s, transform 0.1s; display: flex; align-items: center; justify-content: center; }
+.block:hover { opacity: 0.85; transform: scaleY(1.1); z-index: 1; }
+.block.empty { background: #1a1a1a; cursor: default; }
+.block.empty:hover { opacity: 1; transform: none; }
+.block .block-label { font-size: 9px; color: rgba(255,255,255,0.7); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 3px; }
+.block.low-confidence::after { content: '!'; position: absolute; top: 2px; right: 3px; font-size: 9px; color: #fbbf24; font-weight: 700; }
+.block.verified::before { content: ''; position: absolute; bottom: 2px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: #22c55e; }
+
+/* Modal overlay */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
+.modal-overlay.active { display: flex; }
+.modal { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; width: 640px; max-height: 85vh; overflow-y: auto; padding: 24px; }
+.modal h2 { font-size: 16px; margin-bottom: 16px; color: #fff; }
+.modal-section { margin-bottom: 16px; }
+.modal-section h3 { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.modal-signals { font-size: 13px; line-height: 1.6; }
+.modal-signals .signal-item { padding: 2px 0; color: #ccc; }
+.modal-screenshots { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; }
+.modal-screenshots img { height: 120px; border-radius: 6px; border: 1px solid #333; cursor: pointer; }
+.modal-screenshots img:hover { border-color: #555; }
+
+/* Form */
+.form-group { margin-bottom: 12px; }
+.form-group label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+.form-group select, .form-group input[type="text"] {
+    width: 100%; padding: 8px 10px; background: #0f0f0f; border: 1px solid #333;
+    border-radius: 6px; color: #e0e0e0; font-size: 14px;
+}
+.form-group select:focus, .form-group input:focus { outline: none; border-color: #2563eb; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+/* Lightbox */
+.lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 200; align-items: center; justify-content: center; cursor: pointer; }
+.lightbox.active { display: flex; }
+.lightbox img { max-width: 95vw; max-height: 95vh; border-radius: 8px; }
+
+/* Project colors — assigned dynamically via JS */
+</style>
+</head>
+<body>
+
+<div class="header">
+    <h1>Peak</h1>
+    <div class="header-controls">
+        <button class="btn" id="prev-day">&larr;</button>
+        <input type="date" id="date-picker">
+        <button class="btn" id="next-day">&rarr;</button>
+        <button class="btn btn-primary" id="bulk-verify-btn">Verify All High</button>
+    </div>
+</div>
+
+<div class="stats-bar" id="stats-bar"></div>
+
+<div class="main">
+    <div class="timeline" id="timeline"></div>
+</div>
+
+<!-- Correction Modal -->
+<div class="modal-overlay" id="modal-overlay">
+    <div class="modal" id="modal">
+        <h2 id="modal-title">Block Detail</h2>
+
+        <div class="modal-section" id="modal-screenshots-section" style="display:none">
+            <h3>Screenshots</h3>
+            <div class="modal-screenshots" id="modal-screenshots"></div>
+        </div>
+
+        <div class="modal-section">
+            <h3>Activity</h3>
+            <div class="modal-signals" id="modal-signals"></div>
+        </div>
+
+        <div class="modal-section">
+            <h3>Classification</h3>
+            <div class="form-group">
+                <label>Project</label>
+                <select id="modal-project"></select>
+            </div>
+            <div class="form-group">
+                <label>Task</label>
+                <input type="text" id="modal-task" placeholder="What were you doing?">
+            </div>
+            <div class="form-group">
+                <label>Work Type</label>
+                <select id="modal-work-type">
+                    <option value="deep_work">Deep Work</option>
+                    <option value="shallow_work">Shallow Work</option>
+                    <option value="meeting">Meeting</option>
+                    <option value="break">Break</option>
+                    <option value="personal">Personal</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="modal-actions">
+            <button class="btn" id="modal-cancel">Cancel</button>
+            <button class="btn btn-primary" id="modal-save">Save Correction</button>
+        </div>
+    </div>
+</div>
+
+<!-- Screenshot lightbox -->
+<div class="lightbox" id="lightbox">
+    <img id="lightbox-img" src="">
+</div>
+
+<script>
+const PROJECT_COLORS = [
+    '#2563eb', '#7c3aed', '#db2777', '#ea580c', '#16a34a',
+    '#0891b2', '#4f46e5', '#c026d3', '#d97706', '#059669',
+    '#6366f1', '#e11d48', '#0d9488', '#9333ea', '#ca8a04',
+];
+const WORK_TYPE_LABELS = {
+    deep_work: 'Deep Work', shallow_work: 'Shallow Work',
+    meeting: 'Meeting', break: 'Break', personal: 'Personal',
+};
+
+let currentDate = new Date().toISOString().slice(0, 10);
+let projects = [];
+let projectColorMap = {};
+let currentBlockId = null;
+
+const datePicker = document.getElementById('date-picker');
+datePicker.value = currentDate;
+
+// --- Init ---
+async function init() {
+    const res = await fetch('/api/projects');
+    const data = await res.json();
+    projects = data.projects;
+    projects.forEach((p, i) => {
+        projectColorMap[p.name] = PROJECT_COLORS[i % PROJECT_COLORS.length];
+    });
+    loadDay(currentDate);
+}
+
+// --- Load day ---
+async function loadDay(date) {
+    currentDate = date;
+    datePicker.value = date;
+    const [timelineRes, statsRes] = await Promise.all([
+        fetch(`/api/timeline?date=${date}`),
+        fetch(`/api/stats?date=${date}`),
+    ]);
+    const timelineData = await timelineRes.json();
+    const statsData = await statsRes.json();
+    renderStats(statsData);
+    renderTimeline(timelineData.blocks);
+}
+
+// --- Stats ---
+function renderStats(s) {
+    const bar = document.getElementById('stats-bar');
+    const fmt = m => {
+        if (m >= 60) return `${(m/60).toFixed(1)}h`;
+        return `${Math.round(m)}m`;
+    };
+    bar.innerHTML = `
+        <div class="stat"><span class="stat-value">${fmt(s.total_active_minutes)}</span><span class="stat-label">Active</span></div>
+        <div class="stat"><span class="stat-value">${fmt(s.deep_work_minutes)}</span><span class="stat-label">Deep Work</span></div>
+        <div class="stat"><span class="stat-value">${fmt(s.shallow_work_minutes)}</span><span class="stat-label">Shallow</span></div>
+        <div class="stat"><span class="stat-value">${fmt(s.meeting_minutes)}</span><span class="stat-label">Meetings</span></div>
+        <div class="stat"><span class="stat-value">${fmt(s.break_minutes)}</span><span class="stat-label">Breaks</span></div>
+        <div class="stat"><span class="stat-value">${fmt(s.personal_minutes)}</span><span class="stat-label">Personal</span></div>
+        <div class="stat"><span class="stat-value">${s.total_blocks}</span><span class="stat-label">Blocks</span></div>
+        <div class="stat"><span class="stat-value">${s.verified_blocks}/${s.total_blocks}</span><span class="stat-label">Verified</span></div>
+    `;
+}
+
+// --- Timeline ---
+function renderTimeline(blocks) {
+    const container = document.getElementById('timeline');
+    container.innerHTML = '';
+
+    // Index blocks by their start time (hour:minute)
+    const blockMap = {};
+    blocks.forEach(b => {
+        // Parse ISO time to get HH:MM
+        const t = b.block_start.includes('T') ? b.block_start.split('T')[1] : b.block_start;
+        const hh = parseInt(t.slice(0, 2));
+        const mm = parseInt(t.slice(3, 5));
+        const key = `${hh}:${String(mm).padStart(2, '0')}`;
+        blockMap[key] = b;
+    });
+
+    for (let h = 0; h < 24; h++) {
+        const row = document.createElement('div');
+        row.className = 'hour-row';
+
+        const label = document.createElement('div');
+        label.className = 'hour-label';
+        label.textContent = `${String(h).padStart(2, '0')}:00`;
+        row.appendChild(label);
+
+        const blocksRow = document.createElement('div');
+        blocksRow.className = 'blocks-row';
+
+        for (let m = 0; m < 60; m += 5) {
+            const key = `${h}:${String(m).padStart(2, '0')}`;
+            const b = blockMap[key];
+            const el = document.createElement('div');
+            el.className = 'block';
+
+            if (b) {
+                const color = projectColorMap[b.project] || '#444';
+                el.style.background = color;
+                el.title = `${b.project} — ${b.task || ''} (${b.work_type}, ${b.confidence})`;
+                if (b.confidence === 'low') el.classList.add('low-confidence');
+                if (b.verified) el.classList.add('verified');
+
+                const lbl = document.createElement('span');
+                lbl.className = 'block-label';
+                lbl.textContent = b.project;
+                el.appendChild(lbl);
+
+                el.addEventListener('click', () => openModal(b.id));
+            } else {
+                el.classList.add('empty');
+            }
+
+            blocksRow.appendChild(el);
+        }
+
+        row.appendChild(blocksRow);
+        container.appendChild(row);
+    }
+}
+
+// --- Modal ---
+async function openModal(blockId) {
+    currentBlockId = blockId;
+    const res = await fetch(`/api/block/${blockId}`);
+    const data = await res.json();
+    const cls = data.classification;
+    const ctx = data.context;
+    const screenshots = data.screenshots || [];
+
+    document.getElementById('modal-title').textContent =
+        `Block: ${cls.block_start.split('T')[1]?.slice(0,5) || cls.block_start} — ${cls.block_end.split('T')[1]?.slice(0,5) || cls.block_end}`;
+
+    // Screenshots
+    const ssSection = document.getElementById('modal-screenshots-section');
+    const ssContainer = document.getElementById('modal-screenshots');
+    ssContainer.innerHTML = '';
+    if (screenshots.length > 0) {
+        ssSection.style.display = '';
+        screenshots.forEach(ss => {
+            if (ss.url) {
+                const img = document.createElement('img');
+                img.src = ss.url;
+                img.alt = 'Screenshot';
+                img.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    document.getElementById('lightbox-img').src = ss.url;
+                    document.getElementById('lightbox').classList.add('active');
+                });
+                ssContainer.appendChild(img);
+            }
+        });
+    } else {
+        ssSection.style.display = 'none';
+    }
+
+    // Signals
+    const signalsEl = document.getElementById('modal-signals');
+    if (ctx && !ctx.empty) {
+        let html = `<div class="signal-item"><strong>Active:</strong> ${ctx.active_minutes}m &nbsp; <strong>Idle:</strong> ${ctx.idle_minutes}m &nbsp; <strong>Switches:</strong> ${ctx.app_switches}</div>`;
+        html += `<div class="signal-item"><strong>Dominant:</strong> ${ctx.dominant_app} — ${ctx.dominant_title}</div>`;
+        if (ctx.span_summaries) {
+            ctx.span_summaries.forEach(s => {
+                html += `<div class="signal-item" style="padding-left:8px; color:#aaa;">• ${escapeHtml(s)}</div>`;
+            });
+        }
+        if (ctx.urls && ctx.urls.length) {
+            html += `<div class="signal-item" style="margin-top:4px"><strong>URLs:</strong></div>`;
+            ctx.urls.forEach(u => {
+                html += `<div class="signal-item" style="padding-left:8px; color:#aaa; word-break:break-all;">• ${escapeHtml(u)}</div>`;
+            });
+        }
+        signalsEl.innerHTML = html;
+    } else {
+        signalsEl.innerHTML = '<div class="signal-item" style="color:#666">No signals available</div>';
+    }
+
+    // Form
+    const projectSelect = document.getElementById('modal-project');
+    projectSelect.innerHTML = '';
+    projects.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.name;
+        opt.textContent = p.name;
+        if (p.name === cls.project) opt.selected = true;
+        projectSelect.appendChild(opt);
+    });
+    document.getElementById('modal-task').value = cls.task || '';
+    document.getElementById('modal-work-type').value = cls.work_type;
+
+    document.getElementById('modal-overlay').classList.add('active');
+}
+
+function closeModal() {
+    document.getElementById('modal-overlay').classList.remove('active');
+    currentBlockId = null;
+}
+
+async function saveCorrection() {
+    if (!currentBlockId) return;
+    const body = {
+        classification_id: currentBlockId,
+        project: document.getElementById('modal-project').value,
+        task: document.getElementById('modal-task').value,
+        work_type: document.getElementById('modal-work-type').value,
+    };
+    await fetch('/api/correct', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    closeModal();
+    loadDay(currentDate);
+}
+
+// --- Bulk verify ---
+async function bulkVerify() {
+    await fetch('/api/bulk-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: currentDate }),
+    });
+    loadDay(currentDate);
+}
+
+// --- Helpers ---
+function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+}
+
+function shiftDate(days) {
+    const d = new Date(currentDate + 'T12:00:00');
+    d.setDate(d.getDate() + days);
+    loadDay(d.toISOString().slice(0, 10));
+}
+
+// --- Events ---
+datePicker.addEventListener('change', () => loadDay(datePicker.value));
+document.getElementById('prev-day').addEventListener('click', () => shiftDate(-1));
+document.getElementById('next-day').addEventListener('click', () => shiftDate(1));
+document.getElementById('bulk-verify-btn').addEventListener('click', bulkVerify);
+document.getElementById('modal-cancel').addEventListener('click', closeModal);
+document.getElementById('modal-save').addEventListener('click', saveCorrection);
+document.getElementById('modal-overlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeModal();
+});
+document.getElementById('lightbox').addEventListener('click', () => {
+    document.getElementById('lightbox').classList.remove('active');
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        document.getElementById('lightbox').classList.remove('active');
+        closeModal();
+    }
+    if (!document.getElementById('modal-overlay').classList.contains('active') &&
+        !document.getElementById('lightbox').classList.contains('active')) {
+        if (e.key === 'ArrowLeft') shiftDate(-1);
+        if (e.key === 'ArrowRight') shiftDate(1);
+    }
+});
+
+init();
+</script>
+</body>
+</html>

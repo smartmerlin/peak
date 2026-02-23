@@ -15,6 +15,8 @@ import threading
 from agents.config import load_config
 from agents import db, server
 from agents.screenshot import ScreenshotCapture
+from agents.classifier import ClassificationPipeline
+from agents.web import start_web_ui
 
 
 def main():
@@ -22,14 +24,24 @@ def main():
     standalone = "--standalone" in sys.argv
     system = platform.system()
 
-    # Init DB
+    # Init DB + seed projects
     db.init_db()
     print(f"[peak] Database initialized at {db.DB_PATH}")
+    if config.get("projects"):
+        conn = db.get_connection()
+        db.seed_projects(conn, config["projects"])
+        conn.close()
+        print(f"[peak] Seeded {len(config['projects'])} projects")
 
     # Start screenshot capture in background
     screenshotter = ScreenshotCapture(config, standalone=True)
     screenshot_thread = threading.Thread(target=screenshotter.start, daemon=True)
     screenshot_thread.start()
+
+    # Start classification pipeline in background
+    classifier = ClassificationPipeline(config)
+    classifier_thread = threading.Thread(target=classifier.start, daemon=True)
+    classifier_thread.start()
 
     if system == "Darwin":
         from agents.mac.agent import MacAgent
@@ -45,15 +57,20 @@ def main():
     server.set_agent(agent)
     server.start_server(config)
 
+    # Start web UI
+    start_web_ui(config)
+
     def shutdown(sig, frame):
         agent.stop()
         screenshotter.stop()
+        classifier.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
     atexit.register(agent.stop)
     atexit.register(screenshotter.stop)
+    atexit.register(classifier.stop)
 
     # Start agent (blocks)
     agent.start()
